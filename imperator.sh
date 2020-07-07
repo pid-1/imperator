@@ -106,13 +106,16 @@ check_packages ()
 {
    echo -e "\nPackages:"
 
+   # Similar in implementation as the _find_max function.
    # Can check the offset for numbers in this format:
    #  (7) packages
    #  (100) something
    # With the following:
-   #  $(( $( echo 'l(1400) / l(10)' | bc -l | sed 's/\..*//g' ) + 3 ))
-   # Taking the log(10) of the number, then adding +3 for the  ["(", ")", " "]
-   # for spacing. Similar in implementation as the _find_max function.
+   #  $(( $( echo 'l(1400) / l(10)' | bc -l | sed 's/\..*//g' ) + 1 ))
+   # Need to add the +1 to offset the 0-index:
+   #  1400: 1(10^3), 4(10^2), 0(10^1), 0(10^0)
+   #           3        2        1        0
+   # Then need an additional offset of +3 for the ["(", ")", " "] for spacing.
 
    #                     Explicitly Installed Packages
    #---------------------------------------------------------------------------
