@@ -19,4 +19,6 @@ but decided against it.
 
 Most terminals set `.color0` (black) to the terminal's background color. My
 background has its own (darker) value, so `.color0` is visible. This may not be
-the case for you. Color defs are at the top (line 37).
+the case for you.
+
+Colors are defined in `config.ini` using ANSI escapes.
