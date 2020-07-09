@@ -9,7 +9,9 @@ CONFFILE="${PROGDIR}/config.ini"
 # person who should be editing the config file is you. Don't use substitution.
 sanitize_input ()
 {
-   echo -e "$( sed 's/[\$\`]//g' <<< "$1")"
+   echo -e "$( echo -e "$1" | sed -E 's/[\$\`]//g' )"
+   # Need to use a pipe here, rather than the herestring, as it was improperly
+   # stripping the '\' from escape sequences.
 }
 
 
@@ -40,7 +42,7 @@ handle_aarr ()
    local _LINE="$2"
    local _key _value
 
-   IFS='=' read _key _value <<< "$_LINE"
+   IFS='=' read -r _key _value <<< "$_LINE"
    eval "$_VAR[${_key}]=${_value}"
 }
 

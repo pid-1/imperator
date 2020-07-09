@@ -1,17 +1,28 @@
 #!/bin/bash
 # imperator.sh
 #
-# NOTES:
-# 1. Could probably swap the color escapes to `tput`, as in the trap. It's more
-#    portable, and less error prone when going through `sed` and such.
-# 2. Potentially use 'config.ini' to log all the vars for paths, rather than
-#    hard coding them.
-# 3. Switch the colors to the config file. Will need to change to an associative
-#    array. Something like the following:
-#     >>> declare -A C  # "C" for "Colors"
-#     >>> fromconf C "aarr"
-#     >>> echo "${C[green]} This is green! ${C[reset]}"
-# 4. Fix the super dirty case statement in check_services()
+# Currently all "backup_files" are being routed to the same place.
+# Best way to handle is is probably in the "backup_files" dict. Instead of
+# mapping "name" -> "location". Should map abs_src_loc -> rel_dest_loc:
+#  >>> [ssh_base_dir]
+#  ... senatus:/media/backup/populus/
+#  ...
+#  >>> [backup_files]
+#  ... "/home/aurelius/.bashrc"="dotfiles/bashrc"
+#  ... "/home/aurelius/.vimrc"="dotfiles/vimrc"
+# The command then becomes (in short form):
+#  >>> for src,dest in backup_files
+#  ...    scp ${src} ${base_dir}${dest}
+#
+# The biggest problem with this utility currently is the 'fromconf' function.
+# It is called to instantiate every variable. Thus, it must re-open, parse, and
+# close the config file for every variable. Need to re-work how that function
+# works.
+# A better approach: read through the config file a single time. Use `eval` to
+# directly create each variable, rather than needing to first define the var
+# then search the config file and apply a value to it.
+# The current approach is more apparent what variables are being used in this
+# file, however speed is suffering.
 
 exit_handler ()
 {
@@ -21,6 +32,8 @@ trap exit_handler EXIT
 # Just so we don't get stuck with whacky colors if exited mid- color escape.
 # Using `tput` for portability, instead of relying on the correct escapes.
 
+#                               Set Up Paths
+#-------------------------------------------------------------------------------
 PROGDIR=$( cd $(dirname "${BASH_SOURCE[@]}") && pwd )
 source "${PROGDIR}/lib.sh" # <-- "imports" the `fromconf` function
 
@@ -34,78 +47,69 @@ PATH_PACMAN_DB="${PATH_ROOT}/explicit"
 PATH_YAY_DB="${PATH_ROOT}/foreign"
 PATH_UPGRADE_DATE="${HOME}/.config/imperator/syu-time"
 
-black='\e[30m'
-red='\e[31m'
-yellow='\e[33m'
-green='\e[32m'
-bold='\e[1m'
-reset='\e[0m'
+declare -A c
+fromconf c "aarr"
 
 
 check_services ()
 {
    echo -e "\nRunning services:"
 
-   declare -a _services
-   fromconf _services "iarr"
+   declare -a services
+   fromconf services "iarr"
 
-   len_services=${#_services[@]}
+   num_services=${#services[@]}
 
-   # Find the max length
+   # First iteration...
+   # To effectively space into columns. Iterate once through the list of
+   # services to find the longest name length. Then can justify the right
+   # column w/ the following:  offset = (longest - current) + whitespace
    local max_len=0
-   for _part in "${_services[@]}" ; do
-      _len_part=$( printf "$_part" | wc -m )
-      [[ $_len_part -gt $max_len ]] && max_len=$_len_part
+   for part in "${services[@]}" ; do
+      len_part=$( printf "$part" | wc -m )
+      [[ $len_part -gt $max_len ]] && max_len=$len_part
    done
 
-   for idx in "${!_services[@]}" ; do
-      service=${_services[$idx]}
+   # Second iteration...
+   # Prints services, displaying "active/inactive" status.
+   for idx in "${!services[@]}" ; do
+      serv=${services[$idx]}
 
-      str_len_service=$( printf "$service" | wc -m )
-      offset=$(( $max_len - $str_len_service + 2 ))
+      len_service=$( printf "$serv" | wc -m )
+      offset=$(( $max_len - $len_service + 2 ))
 
-      [[ $idx -eq $((${len_services} - 1)) ]] && spacer='└─' || spacer='├─'
+      [[ $idx -eq $((${num_services} - 1)) ]] && tree='└─' || tree='├─'
 
-      _running="$(systemctl is-active ${service})"
-      case "$_running" in
-         #                      Service: Active
-         #----------------------------------------------------------------------
+      running="$(systemctl is-active ${serv})"
+      case "$running" in
          active)
-            _running="${green}${_running}${reset}"
-            printf "   $spacer $service %${offset}s${_running}\n"
+            printf "   $tree $serv %${offset}s${c[good]}${running}${c[rst]}\n"
             ;;
-
-         #                     Service: Inactive
-         #----------------------------------------------------------------------
-         # EDIT
-         # This is super dirty--should definitely handle this with its
-         # own function, rather than part of a case statement. Just
-         # dropping in here to get the functionality set, will then
-         # wrap into a function later.
          inactive)
-            _running="${yellow}${_running}${reset}"
-            printf "   $spacer $service %${offset}s${_running}\n"
+            printf "   $tree $serv %${offset}s${c[warn]}${running}${c[rst]}\n"
 
-            [[ "$spacer" == '└─' ]] && bar=' ' || bar='│'
-            printf "   ${bar}   ${black}└─ restart?${reset} ${bold}" ; read ans ; printf "${reset}"
+            [[ "$tree" == '└─' ]] && bar=' ' || bar='│'
+            printf "   ${bar}   ${c[dim]}└─ restart?${c[rst]} ${c[bold]}" ; read ans ; printf "${c[rst]}"
 
             if [[ "$ans" =~ [Yy] ]] ; then
-               sudo bash -c "systemctl restart $service &>/dev/null"
+               sudo bash -c "systemctl restart $serv &>/dev/null"
             else
-               printf "\e[1A\e[19C${black}(skipped)${reset}\n"
+               printf "\e[1A\e[19C${c[dim]}(skipped)${c[rst]}\n"
             fi
             ;;
       esac
    done
 
+   # Lists services listed as "failed" from $(systemctl --state=failed)
+   # Does not prompt for any action--only informational
    echo -e "\nFailed services:"
    failed_services=$( awk '{print $2}' <(systemctl --failed | grep ●) )
    if [[ -n "$failed_services" ]] ; then
-      for _failed in "${failed_services[@]}" ; do
-         printf "   ◦ ${red}${_failed}${reset}"
+      for failed in "${failed_services[@]}" ; do
+         printf "   ◦ ${c[crit]}${failed}${c[rst]}"
       done
    else
-      echo -e "   └─ ${green}0${reset} failed"
+      echo -e "   └─ (${c[good]}0${c[rst]}) failed"
    fi
 }
 
@@ -128,32 +132,32 @@ check_packages ()
    #                     Explicitly Installed Packages
    #----------------------------------------------------------------------------
    sudo bash -c "comm -23 <(pacman -Qqe | sort) <(pacman -Qqg base-devel) > $PATH_PACMAN_DB"
-   _explicit_path=" ${black}── ${PATH_PACMAN_DB}${reset}"
-   _explicitly_installed=$( cat $PATH_PACMAN_DB | wc -l )
-   printf "   (${_explicitly_installed}) explicitly installed${_explicit_path}\n"
+   explicit_path=" ${c[dim]}── ${PATH_PACMAN_DB}${c[rst]}"
+   num_explicit=$( cat $PATH_PACMAN_DB | wc -l )
+   printf "   (${num_explicit}) explicitly installed${explicit_path}\n"
 
    #                       Foreign Installed Packages
    #----------------------------------------------------------------------------
    sudo bash -c "pacman -Qqm > $PATH_YAY_DB"
-   _foreign_path=" ${black}── ${PATH_YAY_DB}${reset}"
-   _foreign_installed=$( cat $PATH_YAY_DB | wc -l )
-   printf "   (${_foreign_installed}) foreign installed (yay/yaourt)${_foreign_path}\n"
+   foreign_path=" ${c[dim]}── ${PATH_YAY_DB}${c[rst]}"
+   num_foreign=$( cat $PATH_YAY_DB | wc -l )
+   printf "   (${num_foreign}) foreign installed (yay/yaourt)${foreign_path}\n"
 
    #                            Package Orphans
    #----------------------------------------------------------------------------
    sudo bash -c "pacman -Qqdt > ${PATH_ORPHANED}"
-   _orphaned_path=" ${black}── ${PATH_ORPHANED}${reset}"
-   _num_orphaned=$( cat "$PATH_ORPHANED" | wc -l )
-   if [[ ${_num_orphaned} -eq 0 ]] ; then
-      printf "   (${green}${_num_orphaned}${reset}) orphaned\n"
+   orphaned_path=" ${c[dim]}── ${PATH_ORPHANED}${c[rst]}"
+   num_orphaned=$( cat "$PATH_ORPHANED" | wc -l )
+   if [[ ${num_orphaned} -eq 0 ]] ; then
+      printf "   (${c[good]}${num_orphaned}${c[rst]}) orphaned\n"
    else
-      printf "   ${yellow}(${_num_orphaned})${reset} orphaned${_orphaned_path}\n"
-      printf "    ${black}└─ remove?${reset} ${bold}" ; read ans ; printf "${reset}"
+      printf "   ${c[warn]}(${num_orphaned})${c[rst]} orphaned${orphaned_path}\n"
+      printf "    ${c[dim]}└─ remove?${c[rst]} ${c[bold]}" ; read ans ; printf "${c[rst]}"
       if [[ "$ans" =~ [Yy] ]] ; then
-         sudo bash -c "pacman -Rns --noconfirm - < ${PATH_ORPHANED} >${PATH_ROOT}/pacman-Rns${reset}"
-         printf "       ${black}└─ log: ${PATH_ROOT}/pacman-Rns${reset}\n"
+         sudo bash -c "pacman -Rns --noconfirm - < ${PATH_ORPHANED} >${PATH_ROOT}/pacman-Rns${c[rst]}"
+         printf "       ${c[dim]}└─ log: ${PATH_ROOT}/pacman-Rns${c[rst]}\n"
       else
-         printf "\e[1A\e[15C${black}(skipped)${reset}\n"
+         printf "\e[1A\e[15C${c[dim]}(skipped)${c[rst]}\n"
       fi
    fi
 
@@ -166,10 +170,10 @@ check_packages ()
       prev_date=$(cat "$PATH_UPGRADE_DATE")
       date_diff=$(printf '%.1f\n' $(bc -l <<< "($(date +%s) - ${prev_date}) / (3600*24)" ))
 
-      date_color=${red}
-      [[ $(awk '$1 < 7 {print "True"}' <<< "$date_diff") ]] && date_color=$yellow
-      [[ $(awk '$1 < 3 {print "True"}' <<< "$date_diff") ]] && date_color=$green
-      printf "   └─ ${date_color}${date_diff}${reset} day(s)\n"
+      date_color=${c[crit]}
+      [[ $(awk '$1 < 7 {print "True"}' <<< "$date_diff") ]] && date_color=${c[warn]}
+      [[ $(awk '$1 < 3 {print "True"}' <<< "$date_diff") ]] && date_color=${c[good]}
+      printf "   └─ ${date_color}${date_diff}${c[rst]} day(s)\n"
    fi
 }
 
@@ -183,9 +187,9 @@ backup_config_files ()
 
    # Find the max length
    local max_len=0
-   for _part in "${!backup_files[@]}" ; do
-      _len_part=$( printf "$_part" | wc -m )
-      [[ $_len_part -gt $max_len ]] && max_len=$_len_part
+   for part in "${!backup_files[@]}" ; do
+      len_part=$( printf "$part" | wc -m )
+      [[ $len_part -gt $max_len ]] && max_len=$len_part
    done
 
    for idx in "${!backup_files[@]}" ; do
@@ -194,17 +198,21 @@ backup_config_files ()
 
       printf "   ◦ ${idx}"
 
-      local PATH_DOTFILES
-      fromconf PATH_DOTFILES "var"
+      local scp_dest
+      fromconf scp_dest "var"
 
       #                         `scp` dotfiles
       #-------------------------------------------------------------------------
-      scp_err=$( scp "${backup_files[$idx]}" ${PATH_DOTFILES}${idx} 2>&1)
+      # EDIT
+      # May be better to write the output of the failed `scp`s to a logfile,
+      # rather than printing to the screen. It's more "permanent" in case of the
+      # screen clearing, needing to use the output in a followup script, etc.
+      scp_err=$( scp "${backup_files[$idx]}" ${scp_dest}${idx} 2>&1)
       if [[ $? -eq 0 ]] ; then
-         printf "%${offset}s${black}──${reset}  ${green}done${reset}\n"
+         printf "%${offset}s${c[dim]}──${c[rst]}  ${c[good]}done${c[rst]}\n"
       else
-         printf "%${offset}s${black}──${reset}  ${red}failed${reset}\n"
-         printf "      └─ ${black}$scp_err${reset}\n"
+         printf "%${offset}s${c[dim]}──${c[rst]}  ${c[crit]}failed${c[rst]}\n"
+         printf "      └─ ${c[dim]}$scp_err${c[rst]}\n"
       fi
    done
 }
@@ -216,44 +224,44 @@ prune_paccache ()
 
    #                            Clean Old Cache
    #----------------------------------------------------------------------------
-   printf "   ├─ Clean cached >3 versions? ${black}(y/n)${reset} ${bold}"
-   read ans ; printf "${reset}"
+   printf "   ├─ Clean cached >3 versions? ${c[dim]}(y/n)${c[rst]} ${c[bold]}"
+   read ans ; printf "${c[rst]}"
    if [[ "$ans" =~ [Yy] ]] ; then
       sudo bash -c "paccache -r >${PATH_ROOT}/paccache-r"
-      printf "   │   ${black}└─ log: ${PATH_ROOT}/paccache-r${reset}\n"
+      printf "   │   ${c[dim]}└─ log: ${PATH_ROOT}/paccache-r${c[rst]}\n"
    else
-      printf "\e[1A\e[38C${black}(skipped)${reset}\n"
+      printf "\e[1A\e[38C${c[dim]}(skipped)${c[rst]}\n"
    fi
 
    #                          Clean Uninstalled
    #----------------------------------------------------------------------------
-   printf "   └─ Clean uninstalled packages? ${black}(y/n)${reset} ${bold}"
-   read ans ; printf "${reset}"
+   printf "   └─ Clean uninstalled packages? ${c[dim]}(y/n)${c[rst]} ${c[bold]}"
+   read ans ; printf "${c[rst]}"
    if [[ "$ans" =~ [Yy] ]] ; then
       sudo bash -c "paccache -ruk0 >${PATH_ROOT}/paccache-ruk0"
-      printf "       ${black}└─ log: ${PATH_ROOT}/paccache-ruk0${reset}\n"
+      printf "       ${c[dim]}└─ log: ${PATH_ROOT}/paccache-ruk0${c[rst]}\n"
    else
-      printf "\e[1A\e[40C${black}(skipped)${reset}\n"
+      printf "\e[1A\e[40C${c[dim]}(skipped)${c[rst]}\n"
    fi
 }
 
 
 list_pac_files ()
 {
-   printf "\nHandle .pac* files ${black}── ${PATH_ROOT}/pacfiles${reset}\n"
+   printf "\nHandle .pac* files ${c[dim]}── ${PATH_ROOT}/pacfiles${c[rst]}\n"
 
    #                       List .pac(save|new) Files
    #----------------------------------------------------------------------------
    sudo bash -c "find /etc/ -regextype posix-extended -regex '.*\.pac(save|new)$' > ${PATH_ROOT}/pacfiles"
-   mapfile -t _pacfiles < "${PATH_ROOT}/pacfiles"
+   readarray -t pacfiles < "${PATH_ROOT}/pacfiles"
 
-   len_pacfiles="${#_pacfiles[@]}"
+   len_pacfiles="${#pacfiles[@]}"
    if [[ $len_pacfiles -eq 0 ]] ; then
-      printf "   └─ (${green}0${reset}) found, nice!\n"
+      printf "   └─ (${c[good]}0${c[rst]}) found, nice!\n"
    else
-      for idx in "${!_pacfiles[@]}" ; do
-         pac="${_pacfiles[$idx]}"
-         pac=$( sed -E "s#(.*\/)(.*\.pac(save|new)$)#\\${black}\1\\${reset}\2#g" <<< "$pac" )
+      for idx in "${!pacfiles[@]}" ; do
+         pac="${pacfiles[$idx]}"
+         pac=$( sed -E "s#(.*\/)(.*\.pac(save|new)$)#\\${c[dim]}\1\\${c[rst]}\2#g" <<< "$pac" )
 
          [[ $idx -eq $((${len_pacfiles} - 1)) ]] && spacer='└─' || spacer='├─'
 
