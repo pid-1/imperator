@@ -40,7 +40,7 @@ source "${PROGDIR}/lib.sh" # <-- "imports" the `fromconf` function
 PATH_ROOT="/var/log/imperator"
 [[ ! -d "$PATH_ROOT" ]] && sudo bash -c "mkdir -p $PATH_ROOT"
 PATH_CONFIG="${HOME}/.config/imperator"
-[[ ! -d "$PATH_ROOT" ]] && mkdir -p "$PATH_CONFIG"
+[[ ! -d "$PATH_CONFIG" ]] && mkdir -p "$PATH_CONFIG"
 
 PATH_ORPHANED="${PATH_ROOT}/orphaned"
 PATH_PACMAN_DB="${PATH_ROOT}/explicit"
@@ -53,10 +53,15 @@ fromconf c "aarr"
 
 check_services ()
 {
+   #                            System Services
+   #----------------------------------------------------------------------------
    echo -e "\nRunning services:"
 
    declare -a services
    fromconf services "iarr"
+
+   declare -a user_services
+   fromconf user_services "iarr"
 
    num_services=${#services[@]}
 
@@ -64,8 +69,9 @@ check_services ()
    # To effectively space into columns. Iterate once through the list of
    # services to find the longest name length. Then can justify the right
    # column w/ the following:  offset = (longest - current) + whitespace
+   declare -a all_services=("${services[@]}" "${user_services[@]}")
    local max_len=0
-   for part in "${services[@]}" ; do
+   for part in "${all_services[@]}" ; do
       len_part=$( printf "$part" | wc -m )
       [[ $len_part -gt $max_len ]] && max_len=$len_part
    done
@@ -97,15 +103,70 @@ check_services ()
                printf "\e[1A\e[19C${c[dim]}(skipped)${c[rst]}\n"
             fi
             ;;
-      esac
-   done
+      esac  # case $running
+   done  # for idx in user_services
 
+   #                             User Services
+   #----------------------------------------------------------------------------
+   if [[ -n ${user_services} ]] ; then
+      printf "${c[dim]}User services:${c[rst]}\n"
+
+      num_u_services=${#user_services[@]}
+
+      # Second iteration...
+      # Prints services, displaying "active/inactive" status.
+      for idx in "${!user_services[@]}" ; do
+         serv=${user_services[$idx]}
+
+         len_service=$( printf "$serv" | wc -m )
+         offset=$(( $max_len - $len_service + 2 ))
+
+         [[ $idx -eq $((${num_u_services} - 1)) ]] && tree='└─' || tree='├─'
+
+         running="$(systemctl --user is-active ${serv})"
+         case "$running" in
+            active)
+               printf "   $tree $serv %${offset}s${c[good]}${running}${c[rst]}\n"
+               ;;
+            inactive)
+               printf "   $tree $serv %${offset}s${c[warn]}${running}${c[rst]}\n"
+
+               [[ "$tree" == '└─' ]] && bar=' ' || bar='│'
+               printf "   ${bar}   ${c[dim]}└─ restart?${c[rst]} ${c[bold]}" ; read ans ; printf "${c[rst]}"
+
+               if [[ "$ans" =~ [Yy] ]] ; then
+                  sudo bash -c "systemctl --user restart $serv &>/dev/null"
+               else
+                  printf "\e[1A\e[19C${c[dim]}(skipped)${c[rst]}\n"
+               fi
+               ;;
+         esac  # case $running
+      done  # for idx in user_services
+   fi # if ${user_services}
+
+   #                            Failed Services
+   #----------------------------------------------------------------------------
    # Lists services listed as "failed" from $(systemctl --state=failed)
    # Does not prompt for any action--only informational
    echo -e "\nFailed services:"
    failed_services=$( awk '{print $2}' <(systemctl --failed | grep ●) )
    if [[ -n "$failed_services" ]] ; then
       for failed in "${failed_services[@]}" ; do
+         printf "   ◦ ${c[crit]}${failed}${c[rst]}"
+      done
+   else
+      echo -e "   └─ (${c[good]}0${c[rst]}) failed"
+   fi
+
+   #                          Failed User Services
+   #----------------------------------------------------------------------------
+   # Lists services listed as "failed" from $(systemctl --state=failed)
+   # Does not prompt for any action--only informational
+   printf "${c[dim]}User services:${c[rst]}\n"
+
+   failed_u_services=$( awk '{print $2}' <(systemctl --user --failed | grep ●) )
+   if [[ -n "$failed_u_services" ]] ; then
+      for failed in "${failed_u_services[@]}" ; do
          printf "   ◦ ${c[crit]}${failed}${c[rst]}"
       done
    else
