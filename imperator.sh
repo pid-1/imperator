@@ -152,7 +152,7 @@ check_services ()
    failed_services=$( awk '{print $2}' <(systemctl --failed | grep ●) )
    if [[ -n "$failed_services" ]] ; then
       for failed in "${failed_services[@]}" ; do
-         printf "   ◦ ${c[crit]}${failed}${c[rst]}"
+         printf "   ◦ ${c[crit]}${failed}${c[rst]}\n"
       done
    else
       echo -e "   └─ (${c[good]}0${c[rst]}) failed"
@@ -215,7 +215,7 @@ check_packages ()
       printf "   ${c[warn]}(${num_orphaned})${c[rst]} orphaned${orphaned_path}\n"
       printf "    ${c[dim]}└─ remove?${c[rst]} ${c[bold]}" ; read ans ; printf "${c[rst]}"
       if [[ "$ans" =~ [Yy] ]] ; then
-         sudo bash -c "pacman -Rns --noconfirm - < ${PATH_ORPHANED} >${PATH_ROOT}/pacman-Rns${c[rst]}"
+         sudo bash -c "pacman -Rns --noconfirm - < ${PATH_ORPHANED} >${PATH_ROOT}/pacman-Rns"
          printf "       ${c[dim]}└─ log: ${PATH_ROOT}/pacman-Rns${c[rst]}\n"
       else
          printf "\e[1A\e[15C${c[dim]}(skipped)${c[rst]}\n"
