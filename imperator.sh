@@ -34,7 +34,14 @@ trap exit_handler EXIT
 
 #                               Set Up Paths
 #-------------------------------------------------------------------------------
-PROGDIR=$( cd $(dirname "${BASH_SOURCE[@]}") && pwd )
+# If file is linked from this repo to another dir (~/bin, /usr/bin/, etc), will
+# still properly load its lib file.
+if [[ -L "${BASH_SOURCE[0]}" ]] ; then
+   PROGDIR=$( cd $(dirname $(readlink -f  "${BASH_SOURCE[0]}")) ; pwd )
+else
+   PROGDIR=$( cd $(dirname "${BASH_SOURCE[0]}") ; pwd )
+fi
+
 source "${PROGDIR}/lib.sh" # <-- "imports" the `fromconf` function
 
 PATH_ROOT="/var/log/imperator"
