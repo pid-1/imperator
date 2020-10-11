@@ -22,4 +22,4 @@ background has its own (darker) value, so `.color0` is visible. This may not be
 the case for you.
 
 Colors are defined in `config.ini` using ANSI escapes. See
-docs/example_config.ini for an example.
+`docs/example_config.ini` for an example.
